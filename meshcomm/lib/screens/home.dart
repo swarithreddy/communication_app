@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/ble_service.dart';
 import 'chat.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -11,11 +13,14 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   String _nickname = '';
+  List<ScanResult> _scanResults = [];
+  bool _isScanning = false;
 
   @override
   void initState() {
     super.initState();
     _loadNickname();
+    _listenToScanResults();
   }
 
   Future<void> _loadNickname() async {
@@ -25,11 +30,51 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  // Dummy device list for now — Sprint 2 will fill this with real BLE devices
-  final List<Map<String, String>> _mockDevices = [
-    {'name': 'Ravi\'s Phone', 'id': '00:11:22:33:44:55'},
-    {'name': 'Priya\'s Phone', 'id': '66:77:88:99:AA:BB'},
-  ];
+  void _listenToScanResults() {
+    // Listen to live scan results as devices are discovered
+    BleService.scanResults.listen((results) {
+      if (mounted) {
+        setState(() {
+          // Only show devices that have a name
+          _scanResults = results
+              .where((r) => r.device.platformName.isNotEmpty)
+              .toList();
+        });
+      }
+    });
+
+    // Listen to scanning state
+    BleService.isScanning.listen((scanning) {
+      if (mounted) {
+        setState(() => _isScanning = scanning);
+      }
+    });
+  }
+
+  Future<void> _startScan() async {
+    // Check if Bluetooth is on
+    final adapterState = await FlutterBluePlus.adapterState.first;
+    if (adapterState != BluetoothAdapterState.on) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please turn on Bluetooth to scan'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+
+    setState(() => _scanResults = []); // Clear old results
+    await BleService.startScan();
+  }
+
+  @override
+  void dispose() {
+    BleService.stopScan();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -37,13 +82,15 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('MeshComm'),
         actions: [
-          // Show your own nickname in top right
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Center(
               child: Text(
                 _nickname,
-                style: const TextStyle(color: Color(0xFF1D9E75), fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                  color: Color(0xFF1D9E75),
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
           ),
@@ -54,45 +101,105 @@ class _HomeScreenState extends State<HomeScreen> {
           // Status banner
           Container(
             width: double.infinity,
-            color: const Color(0xFF1D9E75).withOpacity(0.15),
+            color: _isScanning
+                ? const Color(0xFF1D9E75).withOpacity(0.15)
+                : Colors.grey.withOpacity(0.1),
             padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
-            child: const Row(
+            child: Row(
               children: [
-                Icon(Icons.bluetooth_searching, size: 18, color: Color(0xFF1D9E75)),
-                SizedBox(width: 8),
-                Text('Scanning for nearby devices...', style: TextStyle(fontSize: 13)),
+                Icon(
+                  _isScanning ? Icons.bluetooth_searching : Icons.bluetooth,
+                  size: 18,
+                  color: _isScanning ? const Color(0xFF1D9E75) : Colors.grey,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  _isScanning
+                      ? 'Scanning for nearby devices...'
+                      : 'Tap Scan to find nearby devices',
+                  style: const TextStyle(fontSize: 13),
+                ),
+                if (_isScanning) ...[
+                  const Spacer(),
+                  const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ],
               ],
             ),
           ),
 
           // Device list
           Expanded(
-            child: _mockDevices.isEmpty
-                ? const Center(child: Text('No devices found nearby'))
+            child: _scanResults.isEmpty
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.bluetooth_disabled,
+                            size: 64, color: Colors.grey.shade600),
+                        const SizedBox(height: 16),
+                        Text(
+                          _isScanning
+                              ? 'Looking for devices...'
+                              : 'No devices found\nTap Scan to search',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.grey.shade500),
+                        ),
+                      ],
+                    ),
+                  )
                 : ListView.builder(
-                    itemCount: _mockDevices.length,
+                    itemCount: _scanResults.length,
                     itemBuilder: (context, index) {
-                      final device = _mockDevices[index];
+                      final result = _scanResults[index];
+                      final device = result.device;
+                      final rssi = result.rssi;
+
+                      // Signal strength icon based on RSSI value
+                      IconData signalIcon;
+                      if (rssi > -60) {
+                        signalIcon = Icons.signal_cellular_alt;
+                      } else if (rssi > -80) {
+                        signalIcon = Icons.signal_cellular_alt_2_bar;
+                      } else {
+                        signalIcon = Icons.signal_cellular_alt_1_bar;
+                      }
+
                       return ListTile(
                         leading: const CircleAvatar(
-                          child: Icon(Icons.phone_android),
+                          backgroundColor: Color(0xFF1D9E75),
+                          child: Icon(Icons.phone_android, color: Colors.white),
                         ),
-                        title: Text(device['name']!),
-                        subtitle: Text(device['id']!),
-                        trailing: FilledButton.tonal(
-                          onPressed: () {
-                            // Navigate to chat screen with this device
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => ChatScreen(
-                                  deviceName: device['name']!,
-                                  myNickname: _nickname,
-                                ),
-                              ),
-                            );
-                          },
-                          child: const Text('Connect'),
+                        title: Text(device.platformName),
+                        subtitle: Text(
+                          '${device.remoteId} · ${rssi} dBm',
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(signalIcon,
+                                size: 16, color: const Color(0xFF1D9E75)),
+                            const SizedBox(width: 8),
+                            FilledButton.tonal(
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => ChatScreen(
+                                      deviceName: device.platformName,
+                                      myNickname: _nickname,
+                                      device: device,
+                                    ),
+                                  ),
+                                );
+                              },
+                              child: const Text('Connect'),
+                            ),
+                          ],
                         ),
                       );
                     },
@@ -101,16 +208,17 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
 
-      // Floating button to manually scan
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          // Sprint 2: real BLE scan goes here
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('BLE scanning coming in Sprint 2!')),
-          );
-        },
-        icon: const Icon(Icons.search),
-        label: const Text('Scan'),
+        onPressed: _isScanning ? null : _startScan,
+        icon: _isScanning
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Colors.white),
+              )
+            : const Icon(Icons.search),
+        label: Text(_isScanning ? 'Scanning...' : 'Scan'),
       ),
     );
   }

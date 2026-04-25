@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 class ChatScreen extends StatefulWidget {
   final String deviceName;
   final String myNickname;
+  final BluetoothDevice device; // real device passed from home screen
 
   const ChatScreen({
     super.key,
     required this.deviceName,
     required this.myNickname,
+    required this.device,
   });
 
   @override
